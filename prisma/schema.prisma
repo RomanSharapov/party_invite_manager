@@ -1,0 +1,152 @@
+generator client {
+  provider = "prisma-client-js"
+}
+datasource db {
+  provider = "postgresql"
+  url = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+enum PartyStatus {
+  DRAFT
+  PUBLISHED
+  CANCELLED
+}
+enum InviteStatus {
+  NOT_SENT
+  SENT
+  RESPONDED
+}
+enum ResponseStatus {
+  ATTENDING
+  NOT_ATTENDING
+}
+enum AuthTokenType {
+  MAGIC_LINK
+  VERIFY_EMAIL
+  RESET_PASSWORD
+}
+enum EmailType {
+  INVITATION
+  REMINDER
+  RSVP_CONFIRMATION
+  HOST_NOTIFICATION
+  AUTH
+}
+enum DeliveryStatus {
+  PENDING
+  SENDING
+  SENT
+  FAILED
+  PREVIEW
+}
+model User {
+  id String @id @default(cuid())
+  name String
+  email String @unique
+  passwordHash String?
+  emailVerified Boolean @default(false)
+  createdAt DateTime @default(now())
+  parties Party[]
+  sessions Session[]
+  authTokens AuthToken[]
+  responses RsvpResponse[]
+}
+model Party {
+  id String @id @default(cuid())
+  hostUserId String
+  host User @relation(fields: [hostUserId], references: [id], onDelete: Cascade)
+  title String
+  description String @default("")
+  location String
+  theme String?
+  timeZone String @default("America/New_York")
+  startDateTime DateTime @db.Timestamptz(3)
+  endDateTime DateTime? @db.Timestamptz(3)
+  rsvpDeadline DateTime? @db.Timestamptz(3)
+  status PartyStatus @default(DRAFT)
+  coverImageUrl String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  invitees Invitee[]
+  notifications NotificationLog[]
+  @@index([hostUserId, startDateTime])
+}
+model Invitee {
+  id String @id @default(cuid())
+  partyId String
+  party Party @relation(fields: [partyId], references: [id], onDelete: Cascade)
+  name String
+  guardianEmail String
+  note String?
+  inviteToken String @unique
+  inviteStatus InviteStatus @default(NOT_SENT)
+  sentAt DateTime?
+  createdAt DateTime @default(now())
+  response RsvpResponse?
+  notifications NotificationLog[]
+  @@index([partyId])
+}
+model RsvpResponse {
+  id String @id @default(cuid())
+  inviteeId String @unique
+  invitee Invitee @relation(fields: [inviteeId], references: [id], onDelete: Cascade)
+  respondedByUserId String?
+  respondedBy User? @relation(fields: [respondedByUserId], references: [id], onDelete: SetNull)
+  status ResponseStatus
+  message String?
+  submittedAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  additionalAttendees AdditionalAttendee[]
+}
+model AdditionalAttendee {
+  id String @id @default(cuid())
+  rsvpResponseId String
+  response RsvpResponse @relation(fields: [rsvpResponseId], references: [id], onDelete: Cascade)
+  name String
+  relationship String?
+  @@index([rsvpResponseId])
+}
+model NotificationLog {
+  id String @id @default(cuid())
+  type EmailType
+  recipientEmail String
+  relatedPartyId String?
+  party Party? @relation(fields: [relatedPartyId], references: [id], onDelete: Cascade)
+  relatedInviteeId String?
+  invitee Invitee? @relation(fields: [relatedInviteeId], references: [id], onDelete: Cascade)
+  subject String
+  html String
+  text String
+  status DeliveryStatus @default(PENDING)
+  attempts Int @default(0)
+  nextAttemptAt DateTime @default(now())
+  lastError String?
+  providerId String?
+  createdAt DateTime @default(now())
+  sentAt DateTime?
+  @@index([status, nextAttemptAt])
+  @@index([relatedPartyId])
+}
+model Session {
+  id String @id @default(cuid())
+  tokenHash String @unique
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  @@index([userId])
+}
+model AuthToken {
+  id String @id @default(cuid())
+  tokenHash String @unique
+  type AuthTokenType
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  @@index([userId])
+}
+model RateLimit {
+  key String @id
+  count Int @default(1)
+  expiresAt DateTime
+  @@index([expiresAt])
+}
