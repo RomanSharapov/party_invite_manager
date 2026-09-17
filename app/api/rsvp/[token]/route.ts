@@ -31,7 +31,11 @@ export const GET = endpoint(async (_, ctx) => {
     throw new ApiError(404, "Invitation not found");
   const p = invitee.party;
   return NextResponse.json({
-    invitee: { name: invitee.name },
+    invitee: {
+      name: invitee.name,
+      needsEmail:
+        invitee.deliveryMethod === "manual_link" && !invitee.guardianEmail,
+    },
     party: {
       title: p.title,
       description: p.description,
@@ -63,6 +67,7 @@ export const PUT = endpoint(async (req, ctx) => {
   const data = rsvpSchema.parse(await req.json());
   await rateLimit(`rsvp:${token}`, 30);
   let ids: string[] = [];
+  let confirmationQueued = false;
   // Serializable transactions prevent duplicate responses and keep notification totals consistent.
   for (let attempt = 0; attempt < 4; attempt++) {
     try {
@@ -102,9 +107,13 @@ export const PUT = endpoint(async (req, ctx) => {
               },
             },
           });
+          const guardianEmail =
+            i.guardianEmail ??
+            (i.deliveryMethod === "manual_link" ? data.guardianEmail : null) ??
+            null;
           await tx.invitee.update({
             where: { id: i.id },
-            data: { inviteStatus: "RESPONDED" },
+            data: { inviteStatus: "RESPONDED", guardianEmail },
           });
           const all = await tx.invitee.findMany({
             where: { partyId: i.partyId },
@@ -112,10 +121,11 @@ export const PUT = endpoint(async (req, ctx) => {
           });
           const emails = responseEmails(
             i.party,
-            i,
+            { ...i, guardianEmail },
             { ...response, additionalAttendees: data.additionalAttendees },
             totals(all),
           );
+          confirmationQueued = !!guardianEmail;
           const logs = [];
           for (const email of emails)
             logs.push((await tx.notificationLog.create({ data: email })).id);
@@ -140,6 +150,8 @@ export const PUT = endpoint(async (req, ctx) => {
   }
   after(() => flushEmails(ids));
   return NextResponse.json({
-    message: "Your response is saved. A confirmation email has been queued.",
+    message: confirmationQueued
+      ? "Your response is saved. A confirmation email has been queued."
+      : "Your response is saved.",
   });
 });

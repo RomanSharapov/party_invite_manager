@@ -1,5 +1,6 @@
 "use client";
 import { use, useCallback, useEffect, useState } from "react";
+import InviteSharing from "@/components/InviteSharing";
 import { api, dateLabel, Party, Invitee } from "@/lib/client";
 export default function Manage({
   params,
@@ -161,6 +162,7 @@ export default function Manage({
                   <td>
                     <strong>{i.name}</strong>
                     <small>{i.guardianEmail}</small>
+                    {i.phone && <small>{i.phone}</small>}
                     {i.note && <small>Note: {i.note}</small>}
                   </td>
                   <td>
@@ -192,8 +194,20 @@ export default function Manage({
                   </td>
                   <td>
                     <span className={`badge ${i.inviteStatus.toLowerCase()}`}>
-                      {i.inviteStatus.replaceAll("_", " ")}
+                      {i.deliveryMethod === "manual_link"
+                        ? i.response
+                          ? "Responded"
+                          : "Pending"
+                        : i.inviteStatus.replaceAll("_", " ")}
                     </span>
+                    <InviteSharing
+                      action="copy"
+                      invitee={i}
+                      title={p.title}
+                      hostName={p.host.name}
+                      base={base}
+                      onShared={refresh}
+                    />
                     <div>
                       <a
                         className="text-button small"
@@ -219,22 +233,33 @@ export default function Manage({
                       >
                         Edit
                       </button>
-                      <button
-                        className="secondary small"
-                        disabled={busy}
-                        onClick={() =>
-                          act(
-                            () =>
-                              api(`${base}/invitations`, "POST", {
-                                scope: "individual",
-                                inviteeId: i.id,
-                              }),
-                            "Invitation queued.",
-                          )
-                        }
-                      >
-                        Resend
-                      </button>
+                      {i.phone ? (
+                        <InviteSharing
+                          action="share"
+                          invitee={i}
+                          title={p.title}
+                          hostName={p.host.name}
+                          base={base}
+                          onShared={refresh}
+                        />
+                      ) : i.guardianEmail ? (
+                        <button
+                          className="secondary small"
+                          disabled={busy}
+                          onClick={() =>
+                            act(
+                              () =>
+                                api(`${base}/invitations`, "POST", {
+                                  scope: "individual",
+                                  inviteeId: i.id,
+                                }),
+                              "Invitation queued.",
+                            )
+                          }
+                        >
+                          Resend
+                        </button>
+                      ) : null}
                       <button
                         className="danger small"
                         disabled={busy}
@@ -308,21 +333,14 @@ export default function Manage({
                 />
               </label>
               <label>
-                Guardian’s email
+                Guardian’s email/phone
                 <input
-                  name="guardianEmail"
-                  type="email"
-                  defaultValue={edit?.guardianEmail}
+                  name="contact"
+                  type="text"
+                  defaultValue={edit?.phone || edit?.guardianEmail || ""}
+                  placeholder="parent@example.com or +1 555 123 4567"
+                  maxLength={254}
                   required
-                />
-              </label>
-              <label className="full">
-                Private note (optional)
-                <input
-                  name="note"
-                  defaultValue={edit?.note ?? ""}
-                  placeholder="From school, soccer team…"
-                  maxLength={2000}
                 />
               </label>
             </div>
@@ -334,7 +352,9 @@ export default function Manage({
                 <button
                   type="button"
                   className="secondary"
-                  onClick={() => setEdit(null)}
+                  onClick={() => {
+                    setEdit(null);
+                  }}
                 >
                   Cancel edit
                 </button>
@@ -345,8 +365,8 @@ export default function Manage({
         <section className="panel">
           <h2>Bring the whole list.</h2>
           <p className="hint">
-            Paste or upload CSV with <strong>name,email</strong> columns.
-            Optional: note. Every row is checked before anyone is added.
+            Paste or upload one <strong>name,email/phone</strong> per line.
+            A header row is optional. Every row is checked before anyone is added.
           </p>
           <label>
             Upload CSV
@@ -364,7 +384,7 @@ export default function Manage({
             <textarea
               value={csv}
               onChange={(e) => setCsv(e.target.value)}
-              placeholder={"name,email\nSam,parent@example.com"}
+              placeholder={"Sam,2032743708\nElla,parent@example.com"}
             />
           </label>
           <button
@@ -386,7 +406,7 @@ export default function Manage({
           <div>
             <h2>A little nudge</h2>
             <p className="hint">
-              Send a reminder to everyone who hasn’t replied yet.
+              Send an email reminder to Email invitees who haven’t replied yet.
             </p>
           </div>
           <button

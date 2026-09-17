@@ -2,7 +2,7 @@
 import { use, useCallback, useEffect, useState } from "react";
 import { api, dateLabel, Extra } from "@/lib/client";
 type Invitation = {
-  invitee: { name: string };
+  invitee: { name: string; needsEmail: boolean };
   party: {
     title: string;
     description: string;
@@ -38,6 +38,7 @@ export default function Rsvp({
     [notice, setNotice] = useState(""),
     [busy, setBusy] = useState(false),
     [status, setStatus] = useState(""),
+    [guardianEmail, setGuardianEmail] = useState(""),
     [message, setMessage] = useState(""),
     [extras, setExtras] = useState<Extra[]>([]);
   const load = useCallback(async () => {
@@ -135,6 +136,24 @@ export default function Rsvp({
       <section className="panel">
         <p className="eyebrow">One little reply. One happy host.</p>
         <h2>{data.response ? "Your RSVP" : "Can you make it?"}</h2>
+        {data.response && (
+          <div className="success">
+            <p>
+              Saved response:{" "}
+              {data.response.status === "ATTENDING"
+                ? "Attending"
+                : "Not attending"}
+              {data.response.additionalAttendees.length > 0 &&
+                ` · Also coming: ${data.response.additionalAttendees.map((a) => a.name).join(", ")}`}
+            </p>
+            <a
+              className="button secondary"
+              href={`/api/rsvp/${token}/calendar`}
+            >
+              Add to Calendar (.ics)
+            </a>
+          </div>
+        )}
         {locked && (
           <div className="success" role="status">
             {p.status === "CANCELLED"
@@ -157,6 +176,7 @@ export default function Rsvp({
             try {
               const result = await api(`/api/rsvp/${token}`, "PUT", {
                 status,
+                ...(data.invitee.needsEmail ? { guardianEmail } : {}),
                 message,
                 additionalAttendees: status === "ATTENDING" ? extras : [],
               });
@@ -270,6 +290,18 @@ export default function Rsvp({
             />
             <span className="hint">Only your host can see this message.</span>
           </label>
+          {data.invitee.needsEmail && (
+            <label className="spaced">
+              Want a confirmation? Enter your email (optional).
+              <input
+                type="email"
+                maxLength={254}
+                value={guardianEmail}
+                disabled={locked || busy}
+                onChange={(e) => setGuardianEmail(e.target.value)}
+              />
+            </label>
+          )}
           <button className="spaced" disabled={locked || busy || !status}>
             {busy
               ? "Saving your reply…"
