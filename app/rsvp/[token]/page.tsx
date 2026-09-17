@@ -1,6 +1,7 @@
 "use client";
 import { use, useCallback, useEffect, useState } from "react";
 import { api, dateLabel, Extra } from "@/lib/client";
+import { LinkedText } from "@/components/LinkedText";
 type Invitation = {
   invitee: { name: string; needsEmail: boolean };
   party: {
@@ -119,7 +120,7 @@ export default function Rsvp({
         </div>
         {p.description && (
           <p className="pre-wrap" style={{ marginBottom: 0 }}>
-            {p.description}
+            <LinkedText text={p.description} />
           </p>
         )}
       </section>
