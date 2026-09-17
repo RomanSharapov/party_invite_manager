@@ -431,6 +431,223 @@ test("full REST flows, host isolation, guest privacy, auth and deadlines", async
       },
     );
     await t.test(
+      "manual links: contacts, isolation, sharing, email capture and calendar",
+      async () => {
+        const prefix = `/api/parties/${partyId}/invitees`;
+        const input = {
+          name: "Manual Child",
+          deliveryMethod: "manual_link",
+          phone: "+1 (555) 123-4567",
+        };
+        assert.equal(
+          (
+            await request(prefix, "POST", {
+              name: "Missing contact",
+              deliveryMethod: "manual_link",
+            })
+          ).status,
+          400,
+        );
+        assert.equal(
+          (await request(prefix, "POST", { name: "Email child", phone: "123" }))
+            .status,
+          400,
+        );
+        const created = await request(prefix, "POST", {
+          name: input.name,
+          contact: input.phone,
+        });
+        assert.equal(created.status, 201);
+        const manual = created.data[0];
+        assert.equal(manual.guardianEmail, null);
+        assert.equal(manual.deliveryMethod, "manual_link");
+        assert.equal(manual.inviteStatus, "NOT_SENT");
+        assert.match(manual.inviteToken, /^[a-f0-9]{64}$/);
+        const path = `${prefix}/${manual.id}`;
+        assert.equal(
+          (await request(path, "PATCH", { phone: " " })).status,
+          400,
+        );
+        assert.equal(
+          (await request(`${path}/share`, "POST", {}, otherCookie)).status,
+          404,
+        );
+        assert.equal(
+          (await request(`${path}/share`, "POST", {}, "")).status,
+          401,
+        );
+        assert.equal(
+          (
+            await request(`${path}/share`, "POST", {}, cookie, {
+              Origin: "https://evil.example",
+            })
+          ).status,
+          403,
+        );
+        assert.equal((await request(`${path}/share`, "POST", {})).status, 200);
+        const shared = await db.invitee.findUniqueOrThrow({
+          where: { id: manual.id },
+        });
+        assert.ok(shared.linkSharedAt);
+        assert.equal(shared.inviteStatus, "NOT_SENT");
+        assert.equal(shared.inviteToken, manual.inviteToken);
+        assert.equal(
+          await db.notificationLog.count({
+            where: { relatedInviteeId: manual.id },
+          }),
+          0,
+        );
+        const guestPath = `/api/rsvp/${manual.inviteToken}`;
+        assert.equal(
+          (await request(guestPath, "GET", undefined, "")).data.invitee
+            .needsEmail,
+          true,
+        );
+        const saved = await request(
+          guestPath,
+          "PUT",
+          { status: "ATTENDING" },
+          "",
+        );
+        assert.equal(saved.status, 200);
+        assert.equal(saved.data.message, "Your response is saved.");
+        let logs = await db.notificationLog.findMany({
+          where: { relatedInviteeId: manual.id },
+        });
+        assert.deepEqual(
+          logs.map((l) => l.type),
+          ["HOST_NOTIFICATION"],
+        );
+        assert.equal(
+          (
+            await request(
+              guestPath,
+              "PUT",
+              { status: "ATTENDING", guardianEmail: "bad" },
+              "",
+            )
+          ).status,
+          400,
+        );
+        assert.equal(
+          (
+            await request(
+              guestPath,
+              "PUT",
+              {
+                status: "NOT_ATTENDING",
+                guardianEmail: " MANUAL@example.com ",
+              },
+              "",
+            )
+          ).status,
+          200,
+        );
+        const captured = await db.invitee.findUniqueOrThrow({
+          where: { id: manual.id },
+        });
+        assert.equal(captured.guardianEmail, "manual@example.com");
+        assert.equal(captured.inviteToken, manual.inviteToken);
+        assert.equal(captured.deliveryMethod, "manual_link");
+        assert.equal(captured.inviteStatus, "RESPONDED");
+        assert.equal(
+          (await request(guestPath, "GET", undefined, "")).data.invitee
+            .needsEmail,
+          false,
+        );
+        logs = await db.notificationLog.findMany({
+          where: { relatedInviteeId: manual.id },
+        });
+        assert.equal(
+          logs.filter((l) => l.type === "HOST_NOTIFICATION").length,
+          2,
+        );
+        assert.equal(
+          logs.filter((l) => l.type === "RSVP_CONFIRMATION").length,
+          1,
+        );
+        assert.equal(
+          logs.find((l) => l.type === "RSVP_CONFIRMATION")?.recipientEmail,
+          "manual@example.com",
+        );
+        await request(
+          guestPath,
+          "PUT",
+          { status: "ATTENDING", guardianEmail: "replacement@example.com" },
+          "",
+        );
+        assert.equal(
+          (await db.invitee.findUniqueOrThrow({ where: { id: manual.id } }))
+            .guardianEmail,
+          "manual@example.com",
+        );
+        const emailManual = (
+          await request(prefix, "POST", {
+            name: "Email contact",
+            deliveryMethod: "manual_link",
+            guardianEmail: "contact@example.com",
+          })
+        ).data[0];
+        for (const scope of ["unsent", "pending", "individual"]) {
+          await request(`/api/parties/${partyId}/invitations`, "POST", {
+            scope,
+            inviteeId: emailManual.id,
+          });
+          await request(`/api/parties/${partyId}/invitations`, "POST", {
+            scope,
+            inviteeId: manual.id,
+            reminder: true,
+          });
+        }
+        assert.equal(
+          await db.notificationLog.count({
+            where: {
+              relatedInviteeId: { in: [manual.id, emailManual.id] },
+              type: { in: ["INVITATION", "REMINDER"] },
+            },
+          }),
+          0,
+        );
+        const calendar = await fetch(`${base}${guestPath}/calendar`);
+        assert.equal(calendar.status, 200);
+        assert.match(calendar.headers.get("content-type")!, /text\/calendar/);
+        assert.match(
+          calendar.headers.get("content-disposition")!,
+          /attachment.*party.ics/,
+        );
+        const content = await calendar.text();
+        assert.ok(content.includes("BEGIN:VEVENT"));
+        assert.ok(content.includes("LOCATION:Test garden"));
+        assert.ok(!content.includes(manual.phone));
+        assert.ok(!content.includes("manual@example.com"));
+        assert.equal(
+          (await fetch(`${base}/api/rsvp/invalid/calendar`)).status,
+          404,
+        );
+        const preserved = await request(path, "PATCH", {
+          contact: input.phone,
+          name: "Renamed child",
+        });
+        assert.equal(preserved.data.guardianEmail, "manual@example.com");
+        const switched = await request(path, "PATCH", {
+          contact: "new@example.com",
+        });
+        assert.equal(switched.data.deliveryMethod, "email");
+        assert.equal(switched.data.phone, null);
+        assert.equal(switched.data.inviteToken, manual.inviteToken);
+        assert.equal(switched.data.inviteStatus, "RESPONDED");
+        const back = await request(path, "PATCH", {
+          contact: "+1 555 987 6543",
+        });
+        assert.equal(back.data.deliveryMethod, "manual_link");
+        assert.equal(back.data.guardianEmail, null);
+        assert.equal(back.data.inviteToken, manual.inviteToken);
+        await request(path, "DELETE", {});
+        assert.equal((await fetch(`${base}${guestPath}/calendar`)).status, 404);
+        await request(`${prefix}/${emailManual.id}`, "DELETE", {});
+      },
+    );
+    await t.test(
       "server enforces explicit deadline, event-date fallback, draft/cancelled and invalid tokens",
       async () => {
         await request(`/api/parties/${partyId}`, "PATCH", {

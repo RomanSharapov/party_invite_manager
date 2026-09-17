@@ -1,6 +1,7 @@
 import { Resend } from "resend";
 import { db } from "./db";
 import { appUrl } from "./http";
+import { invitationSubject, invitationGreeting } from "./invitation-copy";
 import { partyDate } from "./domain";
 import type { EmailType, Prisma } from "@prisma/client";
 export const escapeHtml = (s: string) =>
@@ -39,21 +40,23 @@ export function invitationEmail(
   i: {
     id: string;
     name: string;
-    guardianEmail: string;
+    guardianEmail: string | null;
     inviteToken: string;
     response?: { status: string } | null;
   },
   reminder = false,
 ) {
+  if (!i.guardianEmail)
+    throw new Error("Invitation email requires an email address");
   return {
     type: (reminder ? "REMINDER" : "INVITATION") as EmailType,
     recipientEmail: i.guardianEmail,
     relatedPartyId: p.id,
     relatedInviteeId: i.id,
     ...template(
-      `${reminder ? "Reminder: " : "You're invited: "}${p.title}`,
+      reminder ? `Reminder: ${p.title}` : invitationSubject(p.title),
       [
-        `Hi ${i.name}! ${p.host.name} would love to celebrate with you.`,
+        invitationGreeting(i.name, p.host.name),
         partyDate(p),
         `Where: ${p.location}`,
         p.rsvpDeadline
@@ -74,7 +77,12 @@ export function invitationEmail(
 }
 export function responseEmails(
   p: PartyInfo,
-  i: { id: string; name: string; guardianEmail: string; inviteToken: string },
+  i: {
+    id: string;
+    name: string;
+    guardianEmail: string | null;
+    inviteToken: string;
+  },
   r: {
     status: string;
     message?: string | null;
@@ -93,26 +101,30 @@ export function responseEmails(
       .map((a) => `${a.name}${a.relationship ? ` (${a.relationship})` : ""}`)
       .join(", ") || "None";
   return [
-    {
-      type: "RSVP_CONFIRMATION" as EmailType,
-      recipientEmail: i.guardianEmail,
-      relatedPartyId: p.id,
-      relatedInviteeId: i.id,
-      ...template(
-        `RSVP confirmed: ${p.title}`,
-        [
-          `${i.name}: ${answer}`,
-          `Additional attendees: ${extras}`,
-          partyDate(p),
-          `Where: ${p.location}`,
-          "You can change your response until the RSVP deadline, or the party start if no deadline is set.",
-        ],
-        {
-          label: "Edit your response",
-          url: `${appUrl()}/rsvp/${i.inviteToken}`,
-        },
-      ),
-    },
+    ...(i.guardianEmail
+      ? [
+          {
+            type: "RSVP_CONFIRMATION" as EmailType,
+            recipientEmail: i.guardianEmail,
+            relatedPartyId: p.id,
+            relatedInviteeId: i.id,
+            ...template(
+              `RSVP confirmed: ${p.title}`,
+              [
+                `${i.name}: ${answer}`,
+                `Additional attendees: ${extras}`,
+                partyDate(p),
+                `Where: ${p.location}`,
+                "You can change your response until the RSVP deadline, or the party start if no deadline is set.",
+              ],
+              {
+                label: "Edit your response",
+                url: `${appUrl()}/rsvp/${i.inviteToken}`,
+              },
+            ),
+          },
+        ]
+      : []),
     {
       type: "HOST_NOTIFICATION" as EmailType,
       recipientEmail: p.host.email,
@@ -195,7 +207,11 @@ export async function deliver(id: string) {
         (log.type === "INVITATION" || log.type === "REMINDER")
       ) {
         await tx.invitee.updateMany({
-          where: { id: log.relatedInviteeId, inviteStatus: "NOT_SENT" },
+          where: {
+            id: log.relatedInviteeId,
+            inviteStatus: "NOT_SENT",
+            deliveryMethod: "email",
+          },
           data: { inviteStatus: "SENT", sentAt: new Date() },
         });
       }

@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { ownedParty, randomToken } from "@/lib/auth";
 import { endpoint, ApiError } from "@/lib/http";
-import { inviteeSchema, parseInviteCsv } from "@/lib/domain";
+import { inviteeSchema, parseInviteCsv, inviteContact } from "@/lib/domain";
 import { z } from "zod";
 export const GET = endpoint(async (_, ctx) => {
   const { id } = await ctx.params;
@@ -30,7 +30,13 @@ export const POST = endpoint(async (req, ctx) => {
     rows = z
       .array(inviteeSchema)
       .min(1)
-      .parse(Array.isArray(body) ? body : [body]);
+      .parse(
+        (Array.isArray(body) ? body : [body]).map((row) =>
+          row.contact !== undefined
+            ? { ...row, ...inviteContact(row.contact) }
+            : row,
+        ),
+      );
   const invitees = await db.$transaction(
     rows.map((row) =>
       db.invitee.create({

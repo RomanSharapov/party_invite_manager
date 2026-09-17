@@ -58,7 +58,7 @@ Never prefix server secrets with `NEXT_PUBLIC_` or commit `.env`.
 
 `lib/email.ts` implements all four Section 6 templates: invitation, guest RSVP confirmation, host response notification, and reminder. Auth emails use the same escaped HTML/plain-text layout. Host notifications include names, relationships, message, and running headcount/response totals. Reminders include the current response state. Hosts can manually remind pending guests or use the individual invitation endpoint with `reminder: true`.
 
-Emails are persisted in `NotificationLog`. RSVP changes and both notification records commit in one serializable transaction. Next.js `after()` starts delivery after the HTTP response; a provider error never rolls back an RSVP. Logs track attempts, pending/sending/sent/failed/preview states and errors. The host can see failures and manually retry/process pending mail. Concurrent workers claim records using a database lease. Retries use exponential backoff, at most five attempts, and the log ID as the provider idempotency key. Resend’s deduplication window is 24 hours, so delivery is at least once rather than an unlimited exactly-once guarantee.
+Emails are persisted in `NotificationLog`. RSVP changes and applicable notification records commit in one serializable transaction. Next.js `after()` starts delivery after the HTTP response; a provider error never rolls back an RSVP. Logs track attempts, pending/sending/sent/failed/preview states and errors. The host can see failures and manually retry/process pending mail. Concurrent workers claim records using a database lease. Retries use exponential backoff, at most five attempts, and the log ID as the provider idempotency key. Resend’s deduplication window is 24 hours, so delivery is at least once rather than an unlimited exactly-once guarantee.
 
 `GET /api/cron/email` drains due work and removes expired auth/session/rate-limit records. `vercel.json` supplies a daily schedule compatible with basic cron availability. For prompt retries and larger lists, configure a supported frequent schedule (for example every five minutes) or an external authenticated scheduler. Immediate delivery also runs on every send/RSVP request. Without a scheduler, failed work remains visible and manually retryable; it does not retry itself in a stopped local process.
 
@@ -99,13 +99,13 @@ All bodies are JSON. Successful creation returns 201, async email queueing 202, 
 | GET / PUT            | `/api/rsvp/:token`                     | **Token only, no host session**: invitation / `{status,message?,additionalAttendees:[{name,relationship?}]}` |
 | GET                  | `/api/cron/email`                      | Bearer `CRON_SECRET`                                                                                         |
 
-Party create requires `title`, `location`, `startDateTime` (ISO timestamp with offset), `timeZone`, and `status` (`DRAFT`, `PUBLISHED`, `CANCELLED`). Optional: `description`, `theme`, `endDateTime`, `rsvpDeadline`, `coverImageUrl`. PATCH accepts a subset. Invitees use `name`, `guardianEmail`, optional `note`. RSVP status is `ATTENDING` or `NOT_ATTENDING`.
+Party create requires `title`, `location`, `startDateTime` (ISO timestamp with offset), `timeZone`, and `status` (`DRAFT`, `PUBLISHED`, `CANCELLED`). Optional: `description`, `theme`, `endDateTime`, `rsvpDeadline`, `coverImageUrl`. PATCH accepts a subset. Invitees use `name`, `deliveryMethod` (`email`, the default, or `manual_link`), `guardianEmail`, optional `phone` and `note`. Email delivery requires an email; Manual Link requires an email or phone. The form accepts a single `contact` email/phone value and infers delivery; edits can switch contact type while preserving the RSVP token. CSV imports also infer email or phone contacts and accept an optional header. RSVP status is `ATTENDING` or `NOT_ATTENDING`.
 
 Example CSV (paste or upload):
 
 ```csv
-name,email,note
-Sam,parent@example.com,From school
+name,email/phone,note
+Sam,2032743708,From school
 "Doe, Ella",parent@example.com,Soccer
 ```
 
@@ -134,5 +134,13 @@ The unit suite checks privacy projection, headcounts, 501 additional attendees, 
 7. Verify a real signup → email link → party → invitation → RSVP → guest confirmation + host notification using addresses you control. Do not seed demo credentials into production.
 
 The local app, migration, tests, and production build can run without an email API key in preview mode. Production delivery and deployment need your service credentials.
+
+## Manual link invitations
+
+Enter a **Guardian’s email/phone** when adding a guest. Email contacts get **Resend** in Manage; phone contacts get **Share** on supported browsers or **Text Invite** otherwise. The Invitation column provides **Copy link** and **Open invite**. Copy Link is always available and falls back to a selectable URL if clipboard access is blocked. The app never sends SMS. Link Shared records a host action, not delivery or opening. Only Email invitees receive invitation/reminder emails.
+
+Manual Link guests without an email can optionally supply one during RSVP; it is saved and receives the normal confirmation. All responses notify the host. Saved RSVPs include an **Add to Calendar (.ics)** download.
+
+New endpoints: `POST /api/parties/:id/invitees/:inviteeId/share` records the owning host’s sharing action; `GET /api/rsvp/:token/calendar` downloads the private invitation’s calendar event. RSVP PUT accepts optional `guardianEmail` when no email is on file. Apply `npm run db:migrate` before running the updated app; the migration preserves existing invitees as Email delivery and keeps their tokens.
 
 Out of scope: daily digests, automated guest reminders, OAuth, calendar sync, party duplication, CSV export, guest account history, shared/public links, and multi-host collaboration. Manual reminders are included.

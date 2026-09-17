@@ -89,11 +89,19 @@ test("CSV supports BOM, quoted commas, shared guardian emails and rejects invali
     ),
     [
       {
+        deliveryMethod: "email",
         name: "Doe, Sam",
         guardianEmail: "parent@example.com",
+        phone: null,
         note: undefined,
       },
-      { name: "Ella", guardianEmail: "parent@example.com", note: undefined },
+      {
+        name: "Ella",
+        guardianEmail: "parent@example.com",
+        phone: null,
+        note: undefined,
+        deliveryMethod: "email",
+      },
     ],
   );
   assert.throws(() => parseInviteCsv("name,email\nSam,invalid"), /row 2/);
@@ -145,4 +153,19 @@ test("party model rejects reversed timing and does not accept capacity", () => {
       .success,
     false,
   );
+});
+
+test("CSV accepts mixed email/phone contacts with or without a header", () => {
+  const input = "bro,2032743708\nliz,liz@gmail.com";
+  const expected = [
+    { name: "bro", deliveryMethod: "manual_link", guardianEmail: null, phone: "2032743708", note: undefined },
+    { name: "liz", deliveryMethod: "email", guardianEmail: "liz@gmail.com", phone: null, note: undefined },
+  ];
+  assert.deepEqual(parseInviteCsv(input), expected);
+  for (const header of ["name,email", "name,phone", "name,email/phone", "name,contact"])
+    assert.deepEqual(parseInviteCsv(`${header}\n${input}`), expected);
+  assert.equal(parseInviteCsv('"Doe, Sam",+1 (203) 274-3708,"From school"')[0].note, "From school");
+  assert.equal(parseInviteCsv('email,name,note\nparent@example.com,Sam,School')[0].name, "Sam");
+  assert.throws(() => parseInviteCsv("bro,2032743708\nliz,invalid"), /CSV row 2:.*email or phone/);
+  assert.throws(() => parseInviteCsv("bro,123"), /CSV row 1/);
 });

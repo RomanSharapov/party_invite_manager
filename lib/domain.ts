@@ -43,14 +43,64 @@ export const partySchema = z
         path: ["rsvpDeadline"],
       });
   });
-export const inviteeSchema = z.object({
-  name: z.string().trim().min(1).max(200),
-  guardianEmail: emailSchema,
-  note: optionalText(2000),
-});
+const optionalEmail = z.preprocess(
+  (value) => (typeof value === "string" && !value.trim() ? null : value),
+  emailSchema.nullish(),
+);
+export function inviteContact(value: unknown): {
+  deliveryMethod: "email" | "manual_link";
+  guardianEmail: string | null;
+  phone: string | null;
+} {
+  const contact = z
+    .string()
+    .trim()
+    .min(1, "Enter a guardian email or phone number.")
+    .max(254)
+    .parse(value);
+  if (contact.includes("@"))
+    return {
+      deliveryMethod: "email" as const,
+      guardianEmail: emailSchema.parse(contact),
+      phone: null,
+    };
+  const phone = z
+    .string()
+    .max(100)
+    .regex(/^\+?[0-9().\s-]+$/, "Enter a valid email or phone number.")
+    .refine((v) => {
+      const digits = v.replace(/\D/g, "");
+      return digits.length >= 7 && digits.length <= 15;
+    }, "Enter a phone number with 7–15 digits.")
+    .parse(contact);
+  return { deliveryMethod: "manual_link" as const, guardianEmail: null, phone };
+}
+export const inviteeSchema = z
+  .object({
+    name: z.string().trim().min(1).max(200),
+    deliveryMethod: z.enum(["email", "manual_link"]).default("email"),
+    guardianEmail: optionalEmail,
+    phone: optionalText(100),
+    note: optionalText(2000),
+  })
+  .superRefine((i, ctx) => {
+    if (i.deliveryMethod === "email" && !i.guardianEmail)
+      ctx.addIssue({
+        code: "custom",
+        path: ["guardianEmail"],
+        message: "Email delivery requires a guardian email.",
+      });
+    if (i.deliveryMethod === "manual_link" && !i.guardianEmail && !i.phone)
+      ctx.addIssue({
+        code: "custom",
+        path: ["phone"],
+        message: "Manual Link requires a guardian email or phone number.",
+      });
+  });
 export const rsvpSchema = z
   .object({
     status: z.enum(["ATTENDING", "NOT_ATTENDING"]),
+    guardianEmail: optionalEmail,
     message: optionalText(10000),
     additionalAttendees: z
       .array(
@@ -66,30 +116,42 @@ export const rsvpSchema = z
     additionalAttendees: v.status === "ATTENDING" ? v.additionalAttendees : [],
   }));
 export function parseInviteCsv(csv: string) {
-  let rows: Record<string, string>[];
+  let rows: string[][];
   try {
     rows = parse(csv, {
-      columns: (headers: string[]) =>
-        headers.map((h) => h.trim().toLowerCase()),
       skip_empty_lines: true,
       bom: true,
       trim: true,
     });
   } catch {
     throw new Error(
-      "Invalid CSV. Use name,email columns and quote values containing commas.",
+      "Invalid CSV. Use name,email/phone columns and quote values containing commas.",
     );
   }
   if (!rows.length) throw new Error("The CSV has no invitees.");
-  return rows.map((row, i) => {
-    const r = inviteeSchema.safeParse({
-      name: row.name,
-      guardianEmail: row.email,
-      note: row.note,
-    });
-    if (!r.success)
-      throw new Error(`CSV row ${i + 2}: a name and valid email are required.`);
-    return r.data;
+  const headers = rows[0].map((value) => value.trim().toLowerCase());
+  const contactIndex = headers.findIndex((value) =>
+    ["email", "phone", "contact", "email/phone"].includes(value),
+  );
+  const hasHeader = headers.includes("name") && contactIndex !== -1;
+  const nameIndex = hasHeader ? headers.indexOf("name") : 0;
+  const noteIndex = hasHeader ? headers.indexOf("note") : 2;
+  const data = hasHeader ? rows.slice(1) : rows;
+  if (!data.length) throw new Error("The CSV has no invitees.");
+  return data.map((row, i) => {
+    try {
+      if (!hasHeader && (row.length < 2 || row.length > 3))
+        throw new Error("Expected name, email/phone and optional note");
+      return inviteeSchema.parse({
+        name: row[nameIndex],
+        ...inviteContact(row[hasHeader ? contactIndex : 1]),
+        note: noteIndex >= 0 ? row[noteIndex] : undefined,
+      });
+    } catch {
+      throw new Error(
+        `CSV row ${i + (hasHeader ? 2 : 1)}: a name and valid email or phone number are required.`,
+      );
+    }
   });
 }
 export function responseLocked(

@@ -25,6 +25,8 @@ export const POST = endpoint(async (req, ctx) => {
   const invitees = await db.invitee.findMany({
     where: {
       partyId: id,
+      deliveryMethod: "email",
+      guardianEmail: { not: null },
       ...(input.scope === "individual"
         ? { id: input.inviteeId }
         : input.scope === "pending"

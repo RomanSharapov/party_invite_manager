@@ -28,7 +28,10 @@ export type Extra = { name: string; relationship?: string | null };
 export type Invitee = {
   id: string;
   name: string;
-  guardianEmail: string;
+  guardianEmail: string | null;
+  deliveryMethod: "email" | "manual_link";
+  phone: string | null;
+  linkSharedAt: string | null;
   note: string | null;
   inviteToken: string;
   inviteStatus: string;
@@ -39,6 +42,7 @@ export type Invitee = {
   } | null;
 };
 export type Party = {
+  host: { name: string };
   id: string;
   title: string;
   description: string;
